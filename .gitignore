@@ -1,3 +1,19 @@
+# Build and run outputs (the program writes these, they are never committed).
 out/
 out2/
+output/
+
+# Dependencies, installed by the runtime, not by this repo.
 node_modules/
+
+# Local environment and secrets: never commit a key, a token or a .env file.
+.env
+.env.*
+
+# Editor and OS clutter.
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
