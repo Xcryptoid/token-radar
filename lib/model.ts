@@ -1,4 +1,4 @@
-// Token Radar's model, radar-2: one snapshot of the protocol universe in, one ranked board out.
+// Token Radar's model, radar-3: one snapshot of the protocol universe in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds every
 // rankable pre-token protocol below the watchlist floor: the early rows the radar exists to find.
@@ -10,7 +10,9 @@
 // the snapshot itself, not chosen by hand:
 //
 //   multiple(category) = median mcap/TVL of the traded protocols in that category,
-//                        shrunk toward the global median with a prior of 3 comps
+//                        each comp's ratio first capped to [0.02, 2.00] so one micro-cap token
+//                        whose market cap is hundreds of times its TVL cannot set the multiple,
+//                        then shrunk toward the global median with a prior of 6 comps
 //                        (a category with one traded comp cannot set the board by itself),
 //                        clamped to [0.05, 1.5]; a category with no comps takes the global median.
 //   base       = tvl_usd x multiple(category)
@@ -65,6 +67,8 @@ export interface ModelConstants {
   multiple_floor: number;
   multiple_cap: number;
   blend_prior: number;
+  ratio_floor: number;
+  ratio_cap: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -77,11 +81,13 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
   multiple_floor: 0.05,
   multiple_cap: 1.5,
-  blend_prior: 3,
+  blend_prior: 6,
+  ratio_floor: 0.02,
+  ratio_cap: 2.0,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** The most early rows the board carries below the watchlist floor. */
 export const EARLY_ROWS = 240;
@@ -234,9 +240,11 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 
 /**
  * Calibrate one multiple per category from the snapshot's own traded protocols: the median
- * market-cap-to-TVL ratio of the category's traded comps, shrunk toward the global median with
- * a prior of `blend_prior` comps so a category with one traded comp cannot set the board by
- * itself, then clamped to the model's bounds.
+ * market-cap-to-TVL ratio of the category's traded comps, each comp's ratio first capped to
+ * [ratio_floor, ratio_cap] so one micro-cap token whose market cap is hundreds of times its TVL
+ * cannot set the multiple, then shrunk toward the global median with a prior of `blend_prior`
+ * comps so a category with one traded comp cannot set the board by itself, then clamped to the
+ * model's bounds.
  */
 export function calibrateMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { multiples: Record<string, CategoryMultiple>; global: number } {
   const ratiosByCategory = new Map<string, number[]>();
@@ -245,10 +253,11 @@ export function calibrateMultiples(snapshot: Snapshot, model: ModelConstants = M
     if (p.mcap_usd === null || p.tvl_usd <= 0 || p.mcap_usd <= 0) continue;
     const ratio = p.mcap_usd / p.tvl_usd;
     if (!Number.isFinite(ratio) || ratio <= 0) continue;
-    allRatios.push(ratio);
+    const capped = Math.min(model.ratio_cap, Math.max(model.ratio_floor, ratio));
+    allRatios.push(capped);
     const key = p.category ?? 'Other';
     const list = ratiosByCategory.get(key) ?? [];
-    list.push(ratio);
+    list.push(capped);
     ratiosByCategory.set(key, list);
   }
   allRatios.sort((a, b) => a - b);
@@ -324,6 +333,37 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
+/**
+ * What one transaction costs on a chain, in whole dollars: Ethereum mainnet is the expensive
+ * outlier, Bitcoin sits in the middle, and every other chain the snapshot names runs under a
+ * dollar a transaction. The figure is the chain's, never the protocol's.
+ */
+function gasFor(chain: string): string {
+  const c = chain.toLowerCase();
+  if (c === 'ethereum') return 'about $10 of gas';
+  if (c === 'bitcoin') return 'about $2 of gas';
+  return 'under $1 of gas';
+}
+
+/** The category's main risk, in the words a farmer can act on, with its check. */
+function riskFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('dex') || c.includes('amm')) return `Watch impermanent loss: if the pool's price moves, the position can end up worth less than holding the tokens. Check the pool's range once a week and exit if it drifts out of range.`;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Watch the loan's health factor: if the collateral falls, the position can be liquidated. Keep the borrow under half the limit and top up collateral if the factor drops.`;
+  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options') || c.includes('synthetic')) return `Watch funding rates and liquidation: a long-held hedge pays funding while the rate stays positive, and a sharp move can liquidate it. Close the hedge if the rate stays high for a week.`;
+  if (c.includes('staking') || c.includes('restak')) return `Note the unbonding wait: unstaking can take days to weeks, so do not stake funds you need soon, and check the wait on ${name}'s own page before you stake.`;
+  if (c.includes('bridge')) return `Bridged funds can take minutes to hours to arrive: wait for the receipt before using them, and never bridge more than you can afford to wait on.`;
+  if (c.includes('stable')) return `The peg is the risk: check the issuer's reserve report once a month, and exit if the stable asset trades off its peg for more than a day.`;
+  if (c.includes('rwa')) return `The issuer's backing is the risk: read the reserve report for ${name}'s yield asset once a month, and exit if the backing is not published.`;
+  if (c.includes('insurance')) return `A claim can be denied: read what ${name}'s cover actually pays for before you buy, and keep the policy's terms with the farm log.`;
+  if (c.includes('launchpad')) return `An allocation can list below its sale price: never put more into a ${name} launch than you can afford to lose, and check the listing terms before the sale closes.`;
+  if (c.includes('prediction')) return `A market can resolve against you: never stake more on one ${name} market than you can afford to lose, and settle each position before the next.`;
+  if (c.includes('yield') || c.includes('leveraged farm') || c.includes('vault') || c.includes('curator') || c.includes('allocator')) return `Vault yields move with the strategy: check ${name}'s return once a week, and exit if it stays below the chain's base rate for a month.`;
+  if (c === 'chain' || c.includes('chain')) return `The chain itself is the risk: a new chain can pause or halt, so check ${name}'s uptime and whether its bridge has paused before, and keep the position small.`;
+  return `Every position can lose value: size the farm so a total loss of the position is affordable, and never borrow to farm.`;
+}
+
 /** The category's main action, in the words a farmer can follow. */
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
@@ -361,8 +401,29 @@ function weeklyFor(p: SnapshotProtocol, capital: number, chain: string): string 
   return `Make one qualifying action each week on ${name}, such as a deposit, a swap or a vote, and keep the receipts.`;
 }
 
+/** The hold step: keep the position open long enough to be counted in more than one snapshot. */
+function holdStep(capital: number, hold: number): FarmStep {
+  return {
+    text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`,
+    cost: `the $${capital} stays in the position`,
+    time: `${hold} days`,
+  };
+}
+
+/** The repeat step: do the main action a second time, on the second chain when the protocol has one. */
+function repeatStep(capital: number, chain: string, secondChain: string | null): FarmStep {
+  const half = Math.floor(capital / 2);
+  return {
+    text: secondChain === null
+      ? `Do the main action a second time in week three with half the capital, so the wallet shows repeat use.`
+      : `Repeat the main action once on ${secondChain}, the protocol's second chain, with $${half} of capital.`,
+    cost: secondChain === null ? `$${half} of capital and ${gasFor(chain)}` : `$${half} of capital and ${gasFor(secondChain)}`,
+    time: '15 minutes',
+  };
+}
+
 /**
- * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is derived
+ * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
  * from the protocol's own record (category, chains, TVL, age), never from a hand-written list of
  * names.
  */
@@ -379,26 +440,21 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
     },
     {
       text: actionFor(p, capital, chain),
-      cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
+      cost: `$${capital} of capital and ${gasFor(chain)}`,
       time: '15 minutes to set up',
     },
     {
+      text: riskFor(p),
+      cost: 'no fee to check',
+      time: '5 minutes a week',
+    },
+    {
       text: weeklyFor(p, capital, chain),
-      cost: 'about $2 of gas a week',
+      cost: `${gasFor(chain)} a week`,
       time: '10 minutes a week',
     },
-    {
-      text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`,
-      cost: `the $${capital} stays in the position`,
-      time: `${hold} days`,
-    },
-    {
-      text: secondChain === null
-        ? `Do the main action a second time in week three with half the capital, so the wallet shows repeat use.`
-        : `Repeat the main action once on ${secondChain}, the protocol's second chain, with $${Math.floor(capital / 2)} of capital.`,
-      cost: secondChain === null ? `$${Math.floor(capital / 2)} of capital and about $3 of gas` : `$${Math.floor(capital / 2)} of capital and about $4 of gas`,
-      time: '15 minutes',
-    },
+    holdStep(capital, hold),
+    repeatStep(capital, chain, secondChain),
     {
       text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
       cost: 'no fee to check, and never pay to claim',
