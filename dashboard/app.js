@@ -66,6 +66,29 @@
     if (age < 365) return 45;
     return 30;
   }
+  function gasFor(chain) {
+    var c = (chain || '').toLowerCase();
+    if (c === 'ethereum') return 'about $10 of gas';
+    if (c === 'bitcoin') return 'about $2 of gas';
+    return 'under $1 of gas';
+  }
+  function riskFor(p) {
+    var c = (p.category || '').toLowerCase();
+    var name = p.name;
+    if (c.indexOf('dex') >= 0 || c.indexOf('amm') >= 0) return 'Watch impermanent loss: if the pool\'s price moves, the position can end up worth less than holding the tokens. Check the pool\'s range once a week and exit if it drifts out of range.';
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Watch the loan\'s health factor: if the collateral falls, the position can be liquidated. Keep the borrow under half the limit and top up collateral if the factor drops.';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0 || c.indexOf('options') >= 0 || c.indexOf('synthetic') >= 0) return 'Watch funding rates and liquidation: a long-held hedge pays funding while the rate stays positive, and a sharp move can liquidate it. Close the hedge if the rate stays high for a week.';
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return 'Note the unbonding wait: unstaking can take days to weeks, so do not stake funds you need soon, and check the wait on ' + name + '\'s own page before you stake.';
+    if (c.indexOf('bridge') >= 0) return 'Bridged funds can take minutes to hours to arrive: wait for the receipt before using them, and never bridge more than you can afford to wait on.';
+    if (c.indexOf('stable') >= 0) return 'The peg is the risk: check the issuer\'s reserve report once a month, and exit if the stable asset trades off its peg for more than a day.';
+    if (c.indexOf('rwa') >= 0) return 'The issuer\'s backing is the risk: read the reserve report for ' + name + '\'s yield asset once a month, and exit if the backing is not published.';
+    if (c.indexOf('insurance') >= 0) return 'A claim can be denied: read what ' + name + '\'s cover actually pays for before you buy, and keep the policy\'s terms with the farm log.';
+    if (c.indexOf('launchpad') >= 0) return 'An allocation can list below its sale price: never put more into a ' + name + ' launch than you can afford to lose, and check the listing terms before the sale closes.';
+    if (c.indexOf('prediction') >= 0) return 'A market can resolve against you: never stake more on one ' + name + ' market than you can afford to lose, and settle each position before the next.';
+    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0 || c.indexOf('vault') >= 0 || c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'Vault yields move with the strategy: check ' + name + '\'s return once a week, and exit if it stays below the chain\'s base rate for a month.';
+    if (c === 'chain' || c.indexOf('chain') >= 0) return 'The chain itself is the risk: a new chain can pause or halt, so check ' + name + '\'s uptime and whether its bridge has paused before, and keep the position small.';
+    return 'Every position can lose value: size the farm so a total loss of the position is affordable, and never borrow to farm.';
+  }
   function actionFor(p, capital, chain) {
     var c = (p.category || '').toLowerCase();
     var name = p.name;
@@ -112,10 +135,11 @@
     var secondChain = p.chains && p.chains.length > 1 ? p.chains[1] : null;
     return [
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
-      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: weeklyFor(p, capital, chain), cost: 'about $2 of gas a week', time: '10 minutes a week' },
+      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and ' + gasFor(chain), time: '15 minutes to set up' },
+      { text: riskFor(p), cost: 'no fee to check', time: '5 minutes a week' },
+      { text: weeklyFor(p, capital, chain), cost: gasFor(chain) + ' a week', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: secondChain === null ? 'Do the main action a second time in week three with half the capital, so the wallet shows repeat use.' : 'Repeat the main action once on ' + secondChain + ", the protocol's second chain, with $" + Math.floor(capital / 2) + ' of capital.', cost: '$' + Math.floor(capital / 2) + ' of capital and about $' + (secondChain === null ? 3 : 4) + ' of gas', time: '15 minutes' },
+      { text: secondChain === null ? 'Do the main action a second time in week three with half the capital, so the wallet shows repeat use.' : 'Repeat the main action once on ' + secondChain + ", the protocol's second chain, with $" + Math.floor(capital / 2) + ' of capital.', cost: '$' + Math.floor(capital / 2) + ' of capital and ' + (secondChain === null ? gasFor(chain) : gasFor(secondChain)), time: '15 minutes' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
       { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
     ].map(stepText);
@@ -174,7 +198,7 @@
 
   function header() {
     return el('header', { class: 'top' },
-      el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { text: 'Token Radar' })),
+      el('div', { class: 'brand' }, el('span', { class: 'mark', html: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="#2dd4a7" stroke-width="1.4"/><circle cx="8" cy="8" r="2.4" fill="#2dd4a7"/><path d="M8 8 L13.5 3.5" stroke="#2dd4a7" stroke-width="1.4"/><circle cx="12.5" cy="10.5" r="1.1" fill="#2dd4a7"/></svg>' }), el('span', { text: 'Token Radar' })),
       el('div', { class: 'top-meta' },
         el('span', { text: 'Snapshot ' + DATA.as_of }),
         el('span', { text: 'DefiLlama protocol index' }),
@@ -328,7 +352,7 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x multiple(category) x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
       ),
-      el('p', { class: 'sub', text: 'The multiple is not a guess: it is the median market-cap-to-TVL ratio of the traded protocols in the same category, shrunk toward the global median (' + fmtMult(DATA.global_multiple) + ') with a prior of ' + m.blend_prior + ' comps, so a category with one traded comp cannot set the board by itself, clamped to ' + fmtMult(m.multiple_floor) + '–' + fmtMult(m.multiple_cap) + '. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
+      el('p', { class: 'sub', text: 'The multiple is not a guess: it is the median market-cap-to-TVL ratio of the traded protocols in the same category. Each comp\u2019s ratio is first capped to ' + fmtMult(m.ratio_floor) + '–' + fmtMult(m.ratio_cap) + ', so one micro-cap token whose market cap is hundreds of times its TVL cannot set a category\u2019s multiple; then it is shrunk toward the global median (' + fmtMult(DATA.global_multiple) + ') with a prior of ' + m.blend_prior + ' comps, so a category with one traded comp cannot set the board by itself, clamped to ' + fmtMult(m.multiple_floor) + '–' + fmtMult(m.multiple_cap) + '. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
       el('table', { class: 'multis' },
         el('caption', { class: 'sub', text: 'Calibrated multiples by category (largest comp sets first).' }),
         el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple' }), el('th', { scope: 'col', text: 'Comps' }))),
